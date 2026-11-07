@@ -121,6 +121,10 @@ jobs:
           coverage: none
       - name: Install, integration tests and multistore in a real shop
         working-directory: ${{ inputs.fixture }}
+        env:
+          # The 5xxxx ports of testing.json fall in the runner's ephemeral range (already taken now and then); each job
+          # has its own runner, so one base below 32768 is safe (build-tools 1.0.2+).
+          PS_TEST_BASE_PORT: '20000'
         run: |
           composer install --no-interaction --no-progress
           vendor/bin/ps-module shops run ${{ matrix.prestashop }} --skip-upgrade --skip-behat
