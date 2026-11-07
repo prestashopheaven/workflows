@@ -1,6 +1,7 @@
 # PrestaHaven workflows
 
-Reusable GitHub workflows and the helper for the monorepos of the PrestaHaven package collection. The plan, the
+Reusable GitHub workflows for the monorepos of the PrestaHaven package collection. The rules themselves live in
+`prestashopheaven/build-tools` (`ps-module mono`), which every monorepo installs. The plan, the
 monorepos and the rules are in the workspace (`docs/packages/`).
 
 | File | What |
@@ -8,7 +9,6 @@ monorepos and the rules are in the workspace (`docs/packages/`).
 | `.github/workflows/mono-ci.yml` | CI of a monorepo: rules, `composer check`, PHP syntax per version, real-shop tests through a fixture module |
 | `.github/workflows/mono-prepare.yml` | First job of a release: reads `Release X.Y.Z - <notes>` and checks version, changelog and tag |
 | `.github/workflows/mono-release.yml` | Tag and GitHub release, split of every package to its read-only repo (deploy key per repo), Packagist |
-| `bin/mono.php` | `packages`, `matrix`, `validate`, `check-release`, `set-version`, `phpstan-paths` |
 
 ## A monorepo uses them like this
 

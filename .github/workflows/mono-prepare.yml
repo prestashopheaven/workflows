@@ -42,16 +42,14 @@ jobs:
         if: steps.meta.outputs.release == 'true'
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v4
-        if: steps.meta.outputs.release == 'true'
-        with:
-          repository: prestashopheaven/workflows
-          path: .mono-tools
       - uses: shivammathur/setup-php@v2
         if: steps.meta.outputs.release == 'true'
         with:
           php-version: '8.1'
+          tools: composer:v2
           coverage: none
       - name: Check the release
         if: steps.meta.outputs.release == 'true'
-        run: php .mono-tools/bin/mono.php check-release "${{ steps.meta.outputs.version }}"
+        run: |
+          composer install --no-interaction --no-progress
+          vendor/bin/ps-module mono check-release "${{ steps.meta.outputs.version }}"

@@ -30,17 +30,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v4
-        with:
-          repository: prestashopheaven/workflows
-          path: .mono-tools
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.1'
+          tools: composer:v2
           coverage: none
       - name: Packages
         id: packages
-        run: echo "matrix=$(php .mono-tools/bin/mono.php matrix)" >> "$GITHUB_OUTPUT"
+        run: |
+          composer install --no-interaction --no-progress
+          echo "matrix=$(vendor/bin/ps-module mono matrix)" >> "$GITHUB_OUTPUT"
       - name: Release notes from CHANGELOG.md
         env:
           VERSION: ${{ inputs.version }}

@@ -8,10 +8,10 @@
 #         shop-prestashop: '["8.1.0","8.1.7","8.2.8","9.0.3","9.1.5","9.2.0"]'
 #         fixture: tests/fixture/heavenmonocore
 #
-# Jobs: the monorepo rules (mono.php validate), `composer check` at the root (lint, coding standard, PHPStan per
-# PrestaShop version, PHP compatibility, unit tests with the coverage gate), the PHP syntax on every PHP version, and
-# with a fixture module: install + integration tests of the packages in real shops, one job per PrestaShop version
-# (on GitHub, not on the developer's PC).
+# Jobs: `composer check` at the root (= ps-module mono check: the monorepo rules, lint, coding standard, PHPStan per
+# PrestaShop version for runtime packages, PHP compatibility, conventions, unit tests with the coverage gate), the PHP
+# syntax on every PHP version, and with a fixture module: install + integration tests of the packages in real shops,
+# one job per PrestaShop version (on GitHub, never on the developer's PC).
 name: Monorepo CI
 
 on:
@@ -26,7 +26,7 @@ on:
         type: string
         default: '["8.1","8.2","8.3","8.4","8.5"]'
       phpstan-prestashop:
-        description: JSON list of PrestaShop versions for PHPStan
+        description: JSON list of PrestaShop versions for PHPStan (runtime monorepos only)
         type: string
         default: '["8.1.0","9.2.0"]'
       shop-prestashop:
@@ -43,38 +43,24 @@ on:
         default: false
 
 jobs:
-  validate:
-    name: Monorepo rules
+  checks:
+    name: composer check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v4
-        with:
-          repository: prestashopheaven/workflows
-          path: .mono-tools
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ inputs.php }}
-          coverage: none
-      - run: php .mono-tools/bin/mono.php validate
-
-  checks:
-    name: composer check
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ inputs.php }}
           tools: composer:v2
           coverage: pcov
-      - name: PrestaShop sources for PHPStan (official images)
+      - name: PrestaShop sources for PHPStan (official images, runtime monorepos)
         env:
           VERSIONS: ${{ inputs.phpstan-prestashop }}
         run: |
+          kind=$(jq -r '.extra.prestashopheaven.monorepo.kind' composer.json)
+          [ "$kind" = "runtime" ] || { echo "A $kind monorepo: no PrestaShop needed."; exit 0; }
           for version in $(echo "$VERSIONS" | jq -r '.[]'); do
             id=$(docker create "prestashop/prestashop:$version")
             mkdir -p "/tmp/prestashop/$version"
@@ -90,7 +76,6 @@ jobs:
 
   php-versions:
     name: Syntax on PHP ${{ matrix.php }}
-    needs: validate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -108,7 +93,6 @@ jobs:
   node:
     name: JavaScript / TypeScript
     if: inputs.node
-    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
