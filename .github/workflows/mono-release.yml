@@ -1,0 +1,111 @@
+# Reusable release of a monorepo (rules PKG-04, PKG-05), after mono-prepare.yml and the monorepo's own checks:
+#   1. tag vX.Y.Z + GitHub release of the monorepo (notes from CHANGELOG.md, index.json attached when present);
+#   2. per package: git subtree split of packages/<dir>, pushed as main + tag vX.Y.Z to its read-only repo
+#      prestashopheaven/<kind>-<dir> with that repo's deploy key (secret SPLIT_KEY_<KEY>, set by `ps-module mono register`);
+#   3. Packagist is told to update each package (secrets PACKAGIST_USERNAME, PACKAGIST_TOKEN); a package that is not on
+#      Packagist yet is created there first.
+# The monorepo's release.yml calls it with `secrets: inherit`.
+name: Monorepo release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      notes:
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag and GitHub release
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.packages.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: prestashopheaven/workflows
+          path: .mono-tools
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+      - name: Packages
+        id: packages
+        run: echo "matrix=$(php .mono-tools/bin/mono.php matrix)" >> "$GITHUB_OUTPUT"
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; if ($0 ~ "^## \\[?" v "\\]?") { found=1; next } }
+            found { print }
+          ' CHANGELOG.md > .release-notes.md
+          test -s .release-notes.md || printf '%s\n' "$NOTES" > .release-notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: ${{ inputs.version }}
+          body_path: .release-notes.md
+          target_commitish: ${{ github.sha }}
+          files: |
+            index.json
+
+  split:
+    name: Split ${{ matrix.package.repo }}
+    needs: tag
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        package: ${{ fromJSON(needs.tag.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Split and push
+        env:
+          DIR: ${{ matrix.package.dir }}
+          REPO: ${{ matrix.package.repo }}
+          VERSION: ${{ inputs.version }}
+          SPLIT_KEY: ${{ secrets[format('SPLIT_KEY_{0}', matrix.package.key)] }}
+        run: |
+          if [ -z "$SPLIT_KEY" ]; then
+            echo "::error::Secret SPLIT_KEY_${{ matrix.package.key }} is missing: run ps-module mono register in the workspace."; exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SPLIT_KEY" > ~/.ssh/split_key
+          chmod 600 ~/.ssh/split_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/split_key -o IdentitiesOnly=yes"
+          git config user.name "PrestaHaven release"
+          git config user.email "release@prestahaven.com"
+          commit=$(git subtree split --prefix="$DIR")
+          git push "git@github.com:$REPO.git" "$commit:refs/heads/main" --force
+          git push "git@github.com:$REPO.git" "$commit:refs/tags/v$VERSION"
+      - name: Packagist
+        env:
+          REPO: ${{ matrix.package.repo }}
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
+        run: |
+          if [ -z "$PACKAGIST_TOKEN" ]; then
+            echo "::warning::No PACKAGIST_TOKEN secret: Packagist only updates through its GitHub hook."; exit 0
+          fi
+          body="{\"repository\":{\"url\":\"https://github.com/$REPO\"}}"
+          base="https://packagist.org/api"
+          auth="username=${PACKAGIST_USERNAME}&apiToken=${PACKAGIST_TOKEN}"
+          if ! curl -fsS -X POST -H 'Content-Type: application/json' "$base/update-package?$auth" -d "$body"; then
+            echo "Not on Packagist yet: creating it."
+            curl -fsS -X POST -H 'Content-Type: application/json' "$base/create-package?$auth" -d "$body"
+          fi

@@ -1,0 +1,142 @@
+# Reusable CI of a PrestaHaven monorepo (docs/packages in the workspace, rules PKG-08).
+# A monorepo's .github/workflows/ci.yml calls it:
+#
+#   jobs:
+#     ci:
+#       uses: prestashopheaven/workflows/.github/workflows/mono-ci.yml@main
+#       with:
+#         shop-prestashop: '["8.1.0","8.1.7","8.2.8","9.0.3","9.1.5","9.2.0"]'
+#         fixture: tests/fixture/heavenmonocore
+#
+# Jobs: the monorepo rules (mono.php validate), `composer check` at the root (lint, coding standard, PHPStan per
+# PrestaShop version, PHP compatibility, unit tests with the coverage gate), the PHP syntax on every PHP version, and
+# with a fixture module: install + integration tests of the packages in real shops, one job per PrestaShop version
+# (on GitHub, not on the developer's PC).
+name: Monorepo CI
+
+on:
+  workflow_call:
+    inputs:
+      php:
+        description: PHP version of the checks (the lowest supported)
+        type: string
+        default: '8.1'
+      php-syntax:
+        description: JSON list of PHP versions for the syntax check
+        type: string
+        default: '["8.1","8.2","8.3","8.4","8.5"]'
+      phpstan-prestashop:
+        description: JSON list of PrestaShop versions for PHPStan
+        type: string
+        default: '["8.1.0","9.2.0"]'
+      shop-prestashop:
+        description: JSON list of PrestaShop versions for the real-shop tests of the fixture module
+        type: string
+        default: '[]'
+      fixture:
+        description: Path of the fixture module that runs the package integration tests in a real shop ('' = none)
+        type: string
+        default: ''
+      node:
+        description: Also run npm ci + npm test at the root (packages with TypeScript or JavaScript)
+        type: boolean
+        default: false
+
+jobs:
+  validate:
+    name: Monorepo rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: prestashopheaven/workflows
+          path: .mono-tools
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php }}
+          coverage: none
+      - run: php .mono-tools/bin/mono.php validate
+
+  checks:
+    name: composer check
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php }}
+          tools: composer:v2
+          coverage: pcov
+      - name: PrestaShop sources for PHPStan (official images)
+        env:
+          VERSIONS: ${{ inputs.phpstan-prestashop }}
+        run: |
+          for version in $(echo "$VERSIONS" | jq -r '.[]'); do
+            id=$(docker create "prestashop/prestashop:$version")
+            mkdir -p "/tmp/prestashop/$version"
+            docker cp "$id:/var/www/html/." "/tmp/prestashop/$version"
+            docker rm "$id" > /dev/null
+          done
+      - name: Install
+        run: composer install --no-interaction --no-progress
+      - name: composer check
+        env:
+          PS_CACHE_DIR: /tmp/prestashop
+        run: composer check
+
+  php-versions:
+    name: Syntax on PHP ${{ matrix.php }}
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJSON(inputs.php-syntax) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - name: php -l on every file
+        run: find packages -type f -name '*.php' ! -path '*/vendor/*' -print0 | xargs -0 -r -n1 php -l -n | (! grep -v "No syntax errors detected")
+
+  node:
+    name: JavaScript / TypeScript
+    if: inputs.node
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+  shops:
+    name: Real shop, PrestaShop ${{ matrix.prestashop }}
+    if: inputs.fixture != '' && inputs.shop-prestashop != '[]'
+    needs: checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        prestashop: ${{ fromJSON(inputs.shop-prestashop) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php }}
+          tools: composer:v2
+          coverage: none
+      - name: Install, integration tests and multistore in a real shop
+        working-directory: ${{ inputs.fixture }}
+        run: |
+          composer install --no-interaction --no-progress
+          vendor/bin/ps-module shops run ${{ matrix.prestashop }} --skip-upgrade --skip-behat

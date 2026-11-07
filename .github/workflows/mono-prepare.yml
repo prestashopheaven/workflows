@@ -1,0 +1,57 @@
+# Reusable first job of a monorepo release (rules PKG-05): reads "Release X.Y.Z - <notes>" from the pushed commit
+# and checks the release (one version in the root composer.json, a CHANGELOG section, tag vX.Y.Z still free).
+# Outputs release=true/false, version and notes; the monorepo's release.yml runs its checks and mono-release.yml only
+# when release is true.
+name: Monorepo release preparation
+
+on:
+  workflow_call:
+    outputs:
+      release:
+        description: true when the pushed commit is a valid release commit
+        value: ${{ jobs.prepare.outputs.release }}
+      version:
+        value: ${{ jobs.prepare.outputs.version }}
+      notes:
+        value: ${{ jobs.prepare.outputs.notes }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.meta.outputs.release }}
+      version: ${{ steps.meta.outputs.version }}
+      notes: ${{ steps.meta.outputs.notes }}
+    steps:
+      - name: Read the version from the commit message
+        id: meta
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          first_line=$(printf '%s' "$MESSAGE" | head -n1)
+          if [[ "$first_line" =~ ^Release[[:space:]]([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]-[[:space:]](.+)$ ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "notes=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          elif [[ "$first_line" =~ ^Release ]]; then
+            echo "::error::A release commit must be: Release X.Y.Z - <notes>"; exit 1
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.meta.outputs.release == 'true'
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        if: steps.meta.outputs.release == 'true'
+        with:
+          repository: prestashopheaven/workflows
+          path: .mono-tools
+      - uses: shivammathur/setup-php@v2
+        if: steps.meta.outputs.release == 'true'
+        with:
+          php-version: '8.1'
+          coverage: none
+      - name: Check the release
+        if: steps.meta.outputs.release == 'true'
+        run: php .mono-tools/bin/mono.php check-release "${{ steps.meta.outputs.version }}"
